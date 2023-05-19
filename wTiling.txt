@@ -1,0 +1,124 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
+
+#define TILE_SIZE 64
+
+// CUDA kernel for matrix multiplication with tiling
+__global__ void matrixMul(int *A, int *B, int *C, int M, int N, int K) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    __shared__ int tile_A[TILE_SIZE][TILE_SIZE];
+    __shared__ int tile_B[TILE_SIZE][TILE_SIZE];
+
+    int tile_count = (K - 1) / TILE_SIZE + 1;
+    int sum = 0;
+
+    for (int t = 0; t < tile_count; t++) {
+        int tile_col = t * TILE_SIZE + threadIdx.x;
+        int tile_row = t * TILE_SIZE + threadIdx.y;
+
+        if (tile_row < K && row < M)
+            tile_A[threadIdx.y][threadIdx.x] = A[row * K + tile_row];
+        else
+            tile_A[threadIdx.y][threadIdx.x] = 0;
+
+        if (tile_col < K && col < N)
+            tile_B[threadIdx.y][threadIdx.x] = B[tile_col * N + col];
+        else
+            tile_B[threadIdx.y][threadIdx.x] = 0;
+
+        __syncthreads();
+
+        for (int k = 0; k < TILE_SIZE; k++)
+            sum += tile_A[threadIdx.y][k] * tile_B[k][threadIdx.x];
+
+        __syncthreads();
+    }
+
+    if (row < M && col < N)
+        C[row * N + col] = sum;
+}
+
+// Function to generate random matrix values
+void randomizeMatrix(int *matrix, int size) {
+    for (int i = 0; i < size; i++) {
+        matrix[i] = rand() % 10; // Random values between 0 and 9
+    }
+}
+
+int main() {
+    
+    int M = 400; // Matrix M dimension
+    int N = 500;  // Matrix N dimension
+    int K = 200;  // Matrix K dimension
+    int size_A = M * K * sizeof(int);
+    int size_B = K * N * sizeof(int);
+    int size_C = M * N * sizeof(int);
+    int *h_A, *h_B, *h_C; // Host matrices
+    int *d_A, *d_B, *d_C; // Device matrices
+
+    // Allocate memory for host matrices
+    h_A = (int *)malloc(size_A);
+    h_B = (int *)malloc(size_B);
+    h_C = (int *)malloc(size_C);
+
+    // Randomize input matrices
+    randomizeMatrix(h_A, M * K);
+    randomizeMatrix(h_B, K * N);
+
+    clock_t start_time, end_time;
+    double elapsed_time;
+
+    // Record start time
+    start_time = clock();
+
+    // Allocate memory for device matrices
+    cudaMalloc((void **)&d_A, size_A);
+    cudaMalloc((void **)&d_B, size_B);
+    cudaMalloc((void **)&d_C, size_C);
+
+    // Copy input matrices from host to device
+    cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
+
+    // Define grid and block dimensions
+    dim3 dimGrid((N - 1) / TILE_SIZE + 1, (M - 1) / TILE_SIZE + 1, 1);
+    dim3 dimBlock(TILE_SIZE, TILE_SIZE, 1);
+
+    // Launch matrix multiplication kernel
+    matrixMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C, M, N, K);
+
+    // Copy result matrix from device to host
+    cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost);
+
+    // Print result matrix (optional)
+    // for (int i = 0; i < M; i++) {
+    //     for (int j = 0; j < N; j++) {
+    //         printf("%d ", h_C[i * N + j]);
+    //     }
+    //     printf("\n");
+    // }
+
+    // Free device memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    // Free host memory
+    free(h_A);
+    free(h_B);
+    free(h_C);
+
+    // Record end time
+    end_time = clock();
+
+    // Calculate elapsed time
+    elapsed_time = ((double) (end_time - start_time)) / CLOCKS_PER_SEC;
+
+    // Print elapsed time
+    printf("Elapsed time: %f seconds\n", elapsed_time);
+
+    return 0;
+}
